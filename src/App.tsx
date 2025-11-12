@@ -33,6 +33,7 @@ interface Metrics {
 // --- 2. Core Simulation Logic ---
 
 const runPrioritySimulation = (initialProcesses: Process[]) => {
+    // Deep copy to prevent modifying the original input state
     const processes: Process[] = JSON.parse(JSON.stringify(initialProcesses));
     let currentTime = 0;
     const ganttChart: GanttSegment[] = [];
@@ -119,7 +120,9 @@ export default function App() {
     const [gantt, setGantt] = useState<GanttSegment[]>([]);
     const [metrics, setMetrics] = useState<Metrics>(initialMetrics);
     const [errorMessage, setErrorMessage] = useState<string>('');
-    const [processCounter, setProcessCounter] = useState(4);
+
+    // State to track the next available ID number (used for new processes)
+    const [nextId, setNextId] = useState(initialProcesses.length + 1);
 
     // RESTORED essential custom styles
     const customStyles = `
@@ -164,7 +167,7 @@ export default function App() {
         }
     `;
 
-    // Handlers
+    // Handler for updating process values (AT, BT, P)
     const handleProcessChange = useCallback((index: number, field: keyof Process, value: string) => {
         const numValue = parseInt(value);
         if ((field === 'burst' || field === 'priority') && numValue <= 0) return;
@@ -173,6 +176,16 @@ export default function App() {
         setInputProcesses(prev => prev.map((p, i) => i === index ? { ...p, [field]: numValue } : p));
     }, []);
 
+    // Function to ensure PIDs are sequential (P1, P2, P3...) after additions or deletions.
+    const reindexProcesses = useCallback((processes: Process[]): Process[] => {
+        return processes.map((p, index) => ({
+            ...p,
+            id: index + 1, // Re-assign sequential ID for coloring and display order
+            pid: `P${index + 1}` // Re-assign sequential PID string
+        }));
+    }, []);
+
+
     const addProcess = useCallback(() => {
         setInputProcesses(prev => {
             const lastP = prev[prev.length - 1];
@@ -180,8 +193,8 @@ export default function App() {
             const defaultP = lastP ? Math.max(1, lastP.priority + 1) : 1;
 
             const newProcess: Process = {
-                id: processCounter,
-                pid: `P${processCounter}`,
+                id: nextId, // Use the unique ID for the new process
+                pid: `P${nextId}`, 
                 arrival: defaultAT,
                 burst: 5,
                 priority: defaultP,
@@ -191,14 +204,20 @@ export default function App() {
                 waitingTime: 0,
                 startTimes: []
             };
-            setProcessCounter(c => c + 1);
-            return [...prev, newProcess];
+            setNextId(prevId => prevId + 1); // Increment unique ID counter
+
+            // Reindex the entire array after adding the new process
+            return reindexProcesses([...prev, newProcess]);
         });
-    }, [processCounter]);
+    }, [nextId, reindexProcesses]);
 
     const removeProcess = useCallback((id: number) => {
-        setInputProcesses(prev => prev.filter(p => p.id !== id));
-    }, []);
+        setInputProcesses(prev => {
+            const filtered = prev.filter(p => p.id !== id);
+            // Reindex the array after removing the process
+            return reindexProcesses(filtered);
+        });
+    }, [reindexProcesses]);
 
     const handleSubmit = useCallback((e: React.FormEvent) => {
         e.preventDefault();
@@ -249,13 +268,12 @@ export default function App() {
         handleSubmit({ preventDefault: () => {} } as React.FormEvent);
     }, [inputProcesses.length, handleSubmit]);
 
-    // --- Gantt Chart Rendering (RESTORED) ---
+    // --- Gantt Chart Rendering ---
     const GanttChart = useMemo(() => {
         if (gantt.length === 0) {
             return <p className="text-gray-500 italic p-4">Run the simulation to generate the Gantt Chart.</p>;
         }
         
-        // Define a fixed unit width to control scaling
         const unitWidth = 40; 
         const chartWidth = metrics.totalTime * unitWidth;
 
@@ -267,7 +285,6 @@ export default function App() {
             const colorClass = segment.pid === 'IDLE' ? 'color-idle' : getColorClass(segment.id);
             
             // Add time marker for the end of the segment
-            // Check if marker for this time already exists to avoid duplicates
             if (!timeMarkers.some(m => m.key === segment.end.toString())) {
                 timeMarkers.push(
                     <div 
@@ -297,7 +314,6 @@ export default function App() {
                 <div id="gantt-chart" className="flex relative h-16" style={{ width: `${chartWidth}px`, minWidth: '100%' }}>
                     {segments}
                     <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
-                        {/* Render time markers on top of the chart */}
                         {timeMarkers}
                     </div>
                 </div>
@@ -307,6 +323,7 @@ export default function App() {
 
     // --- Results Table ---
     const ResultsTable = useMemo(() => {
+        // Results are already re-indexed, sort by P ID (string sort)
         const displayedProcesses = [...resultProcesses].sort((a, b) => a.id - b.id);
 
         return (
@@ -359,28 +376,34 @@ export default function App() {
                     <div className="lg:col-span-1 bg-white p-7 rounded-2xl shadow-xl border border-gray-100 h-fit">
                         <h2 className="text-2xl font-bold mb-4 text-gray-800 border-b pb-2">Process Input</h2>
                         <form onSubmit={handleSubmit} className="space-y-6">
-                            <div className="grid grid-cols-4 gap-2 text-sm font-bold text-gray-700 mb-2">
+                            {/* Corrected: grid-cols-5 for the delete button */}
+                            <div className="grid grid-cols-5 gap-2 text-sm font-bold text-gray-700 mb-2">
                                 <span className="text-center">P ID</span>
                                 <span className="text-center">AT</span>
                                 <span className="text-center">BT</span>
                                 <span className="text-center">P</span>
+                                <span className="text-center"></span> {/* Delete column header */}
                             </div>
 
-                            <div className="space-y-4 max-h-[300px] overflow-y-auto pr-4">
+                            <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2">
+                                {/* FIX: Reindex logic ensures sequential PIDs after any edit */}
                                 {inputProcesses.map((p, index) => (
-                                    <div key={p.id} className="grid grid-cols-4 gap-2 relative items-center group">
+                                    <div key={p.id} className="grid grid-cols-5 gap-2 items-center">
                                         <input type="text" value={p.pid} disabled className="p-2 border rounded-lg bg-gray-100 text-center font-semibold" />
                                         <input type="number" min="0" value={p.arrival} onChange={e => handleProcessChange(index, 'arrival', e.target.value)} className="p-2 border rounded-lg text-center focus:ring-indigo-500 focus:border-indigo-500" required />
                                         <input type="number" min="1" value={p.burst} onChange={e => handleProcessChange(index, 'burst', e.target.value)} className="p-2 border rounded-lg text-center focus:ring-indigo-500 focus:border-indigo-500" required />
                                         <input type="number" min="1" value={p.priority} onChange={e => handleProcessChange(index, 'priority', e.target.value)} className="p-2 border rounded-lg text-center font-bold focus:ring-indigo-500 focus:border-indigo-500" required />
-                                        <button 
-                                            type="button" 
-                                            onClick={() => removeProcess(p.id)} 
-                                            className="absolute right-[-2rem] top-1/2 -translate-y-1/2 text-red-500 opacity-70 hover:opacity-100 transition duration-200"
-                                            title={`Remove ${p.pid}`}
-                                        >
-                                            <Trash2 size={18} />
-                                        </button>
+                                        
+                                        <div className="flex justify-center">
+                                            <button 
+                                                type="button" 
+                                                onClick={() => removeProcess(p.id)} 
+                                                className="text-red-500 hover:text-red-700 transition duration-200 p-1"
+                                                title={`Remove ${p.pid}`}
+                                            >
+                                                <Trash2 size={18} />
+                                            </button>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
